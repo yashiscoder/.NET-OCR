@@ -1,0 +1,7 @@
+**/bin/
+**/obj/
+.git/
+samples/
+tessdata/
+*.user
+*.suo
