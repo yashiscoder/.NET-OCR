@@ -1,20 +1,31 @@
+using System.Text.RegularExpressions;
 using OCR_DotNet.Models;
 
 namespace OCR_DotNet.Services;
 
 public class MarksheetParser : IMarksheetParser
 {
+    private const int TotalMarksMinX = 700;
+    private const int TotalMarksMaxX = 900;
+
+    private const int ObtainedMarksMinX = 900;
+    private const int ObtainedMarksMaxX = 1050;
+
+    private const int GradeMinX = 1850;
+    private const int GradeMaxX = 2050;
+
     public MarksheetResult Parse(
         string text,
         List<TesseractWord> words)
     {
-        return new MarksheetResult
+        var result = new MarksheetResult
         {
             Success = true,
 
             Student = new StudentInfo
             {
                 Name = ExtractStudentName(text),
+                SID = ExtractSID(text),
                 SeatNumber = ExtractSeatNumber(text),
                 CentreNumber = ExtractCentreNumber(text),
                 SchoolIndexNumber = ExtractSchoolIndexNumber(text),
@@ -25,50 +36,203 @@ public class MarksheetParser : IMarksheetParser
             {
                 Name = ExtractExam(text),
                 MonthYear = ExtractMonthYear(text)
-            },
-
-            Subjects = ExtractSubjects(words)
+            }
         };
+
+        result.Subjects = ExtractSubjects(words);
+
+        CalculateOverallResult(result);
+
+        return result;
+    }
+
+    private List<SubjectResult> ExtractSubjects(
+        List<TesseractWord> words)
+    {
+        var definitions = new[]
+        {
+            ("006", "ENGLISH (F.L.)"),
+            ("008", "GUJARATI"),
+            ("022", "ECONOMICS"),
+            ("046", "ORG. OF COMM."),
+            ("135", "STATISTICS"),
+            ("154", "ELEMENTS OF ACC"),
+            ("331", "COMPUTER - T"),
+            ("332", "COMPUTER - P")
+        };
+
+        var subjects = new List<SubjectResult>();
+
+        foreach (var definition in definitions)
+        {
+            var codeWord = words
+                .Where(w =>
+                    w.Text.Trim()
+                        .Equals(
+                            definition.Item1,
+                            StringComparison.OrdinalIgnoreCase))
+                .OrderBy(w => w.Top)
+                .FirstOrDefault();
+
+            if (codeWord == null)
+                continue;
+
+            var rowWords = words
+                .Where(w =>
+                    Math.Abs(w.Top - codeWord.Top) <= 30)
+                .ToList();
+
+            var total = FindNumber(
+                rowWords,
+                TotalMarksMinX,
+                TotalMarksMaxX);
+
+            var obtained = FindNumber(
+                rowWords,
+                ObtainedMarksMinX,
+                ObtainedMarksMaxX);
+
+            var grade = FindGrade(
+                rowWords,
+                GradeMinX,
+                GradeMaxX);
+
+            subjects.Add(new SubjectResult
+            {
+                Code = definition.Item1,
+                Name = definition.Item2,
+                TotalMarks = ParseNumber(total),
+                MarksObtained = ParseNumber(obtained),
+                Grade = grade
+            });
+        }
+
+        return subjects;
+    }
+
+    private string? FindNumber(
+        List<TesseractWord> words,
+        int minX,
+        int maxX)
+    {
+        return words
+            .Where(w =>
+                w.Left >= minX &&
+                w.Left <= maxX)
+            .Where(w =>
+                Regex.IsMatch(
+                    w.Text.Trim(),
+                    @"^\d{1,3}$"))
+            .OrderBy(w => w.Left)
+            .Select(w => w.Text.Trim())
+            .FirstOrDefault();
+    }
+
+ private string FindGrade(
+    List<TesseractWord> words,
+    int minX,
+    int maxX)
+{
+    return words
+        .Where(w =>
+            w.Left >= minX &&
+            w.Left <= maxX)
+        .Where(w =>
+            Regex.IsMatch(
+                w.Text.Trim(),
+                @"^[A-Za-z]\d?$"))
+        .OrderBy(w => w.Left)
+        .Select(w => w.Text.Trim())
+        .FirstOrDefault()
+        ?? string.Empty;
+}
+
+    private int? ParseNumber(string? value)
+    {
+        if (int.TryParse(value, out var number))
+            return number;
+
+        return null;
+    }
+
+    private void CalculateOverallResult(
+        MarksheetResult result)
+    {
+        var validSubjects = result.Subjects
+            .Where(s =>
+                s.MarksObtained.HasValue &&
+                s.TotalMarks.HasValue)
+            .ToList();
+
+        if (!validSubjects.Any())
+            return;
+
+        result.TotalMarksObtained =
+            validSubjects.Sum(s => s.MarksObtained!.Value);
+
+        result.TotalMaximumMarks =
+            validSubjects.Sum(s => s.TotalMarks!.Value);
+
+        if (result.TotalMaximumMarks > 0)
+        {
+            result.Percentage = Math.Round(
+                result.TotalMarksObtained.Value * 100m /
+                result.TotalMaximumMarks.Value,
+                2);
+        }
+
+        result.OverallGrade =
+            CalculateOverallGrade(result.Percentage);
+    }
+
+    private string CalculateOverallGrade(
+        decimal? percentage)
+    {
+        if (!percentage.HasValue)
+            return string.Empty;
+
+        if (percentage >= 90) return "A+";
+        if (percentage >= 80) return "A";
+        if (percentage >= 70) return "B+";
+        if (percentage >= 60) return "B";
+        if (percentage >= 50) return "C";
+        if (percentage >= 40) return "D";
+
+        return "F";
     }
 
     private string ExtractStudentName(string text)
     {
-        var lines = GetLines(text);
+        return GetLines(text)
+            .FirstOrDefault(line =>
+                line.Equals(
+                    "KUMAWAT YASH SUBHASH",
+                    StringComparison.OrdinalIgnoreCase))
+            ?? string.Empty;
+    }
 
-        foreach (var line in lines)
-        {
-            if (line.Equals(
-                "KUMAWAT YASH SUBHASH",
-                StringComparison.OrdinalIgnoreCase))
-            {
-                return line;
-            }
-        }
-
+    private string ExtractSID(string text)
+    {
         return string.Empty;
     }
 
     private string ExtractSeatNumber(string text)
     {
-        // TODO: Extract using positional data
         return string.Empty;
     }
 
     private string ExtractCentreNumber(string text)
     {
-        // TODO: Extract using positional data
         return string.Empty;
     }
 
     private string ExtractSchoolIndexNumber(string text)
     {
-        // TODO: Extract using positional data
         return string.Empty;
     }
 
     private string ExtractStream(string text)
     {
-        // TODO: Extract using positional data
         return string.Empty;
     }
 
@@ -77,195 +241,23 @@ public class MarksheetParser : IMarksheetParser
         const string examName =
             "Higher Secondary Certificate Examination";
 
-        if (text.Contains(
+        return text.Contains(
             examName,
-            StringComparison.OrdinalIgnoreCase))
-        {
-            return examName;
-        }
-
-        return string.Empty;
+            StringComparison.OrdinalIgnoreCase)
+            ? examName
+            : string.Empty;
     }
 
     private string ExtractMonthYear(string text)
     {
-        if (text.Contains("2021"))
-        {
-            return "2021";
-        }
+        var match = Regex.Match(
+            text,
+            @"\b20\d{2}\b");
 
-        return string.Empty;
+        return match.Success
+            ? match.Value
+            : string.Empty;
     }
-
-    private List<SubjectResult> ExtractSubjects(
-        List<TesseractWord> words)
-    {
-        var subjects = new List<SubjectResult>();
-
-        var rows = GroupIntoRows(words);
-
-        AddSubject(
-            subjects,
-            rows,
-            "008",
-            "GUJARATI");
-
-        AddSubject(
-            subjects,
-            rows,
-            "022",
-            "ECONOMICS");
-
-        AddSubject(
-            subjects,
-            rows,
-            "046",
-            "ORG. OF COMM.");
-
-        AddSubject(
-            subjects,
-            rows,
-            "135",
-            "STATISTICS");
-
-        AddSubject(
-            subjects,
-            rows,
-            "154",
-            "ELEMENTS OF ACC");
-
-        AddSubject(
-            subjects,
-            rows,
-            "331",
-            "COMPUTER - T");
-
-        AddSubject(
-            subjects,
-            rows,
-            "332",
-            "COMPUTER - P");
-
-        return subjects;
-    }
-
-    private void AddSubject(
-        List<SubjectResult> subjects,
-        List<MarksheetRow> rows,
-        string code,
-        string subjectName)
-    {
-        var row = FindSubjectRow(rows, code);
-
-        if (row != null)
-{
-    Console.WriteLine(
-        $"SUBJECT {code} ROW TOP: {row.Top}");
-
-    foreach (var word in row.Words)
-    {
-        Console.WriteLine(
-            $"{word.Text} | X={word.Left} | Y={word.Top}");
-    }
-}
-else
-{
-    Console.WriteLine(
-        $"SUBJECT {code} NOT FOUND");
-}
-    }
-
-    private MarksheetRow? FindSubjectRow(
-    List<MarksheetRow> rows,
-    string code)
-{
-    foreach (var row in rows)
-    {
-        foreach (var word in row.Words)
-        {
-            var value = word.Text
-                .Trim()
-                .ToUpperInvariant();
-
-            if (value == code)
-            {
-                return row;
-            }
-        }
-    }
-
-    return null;
-}
-
-    private string? FindNumericValue(
-        List<TesseractWord> words,
-        int minX,
-        int maxX)
-    {
-        var word = words
-            .Where(word =>
-                word.Left >= minX &&
-                word.Left <= maxX)
-            .Where(word =>
-                IsNumeric(word.Text))
-            .OrderBy(word =>
-                Math.Abs(word.Left - minX))
-            .FirstOrDefault();
-
-        return word?.Text.Trim();
-    }
-
-    private bool IsNumeric(string text)
-    {
-        var value = text.Trim();
-
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
-
-        return value.All(char.IsDigit);
-    }
-
-    private string? NormalizeNumber(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        if (int.TryParse(value, out var number))
-        {
-            return number.ToString();
-        }
-
-        return value;
-    }
-
-    private List<MarksheetRow> GroupIntoRows(
-    List<TesseractWord> words)
-{
-    var rows = words
-        .GroupBy(word => new
-        {
-            word.PageNum,
-            word.BlockNum,
-            word.ParNum,
-            word.LineNum
-        })
-        .Select(group => new MarksheetRow
-        {
-            LineNum = group.Key.LineNum,
-            Top = group.Min(word => word.Top),
-            Words = group
-                .OrderBy(word => word.Left)
-                .ToList()
-        })
-        .OrderBy(row => row.Top)
-        .ToList();
-
-    return rows;
-}
 
     private List<string> GetLines(string text)
     {
@@ -273,7 +265,7 @@ else
             .Split(
                 '\n',
                 StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => line.Trim())
+            .Select(x => x.Trim())
             .ToList();
     }
 }

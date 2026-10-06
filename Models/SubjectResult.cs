@@ -6,7 +6,9 @@ public class SubjectResult
 
     public string Name { get; set; } = string.Empty;
 
-    public string? MarksObtained { get; set; }
+    public int? TotalMarks { get; set; }
 
-    public string? TotalMarks { get; set; }
+    public int? MarksObtained { get; set; }
+
+    public string Grade { get; set; } = string.Empty;
 }

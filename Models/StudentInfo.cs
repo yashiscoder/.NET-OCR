@@ -4,6 +4,8 @@ public class StudentInfo
 {
     public string Name { get; set; } = string.Empty;
 
+    public string SID { get; set; } = string.Empty;
+
     public string SeatNumber { get; set; } = string.Empty;
 
     public string CentreNumber { get; set; } = string.Empty;
